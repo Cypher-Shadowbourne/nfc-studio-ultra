@@ -1,0 +1,13 @@
+﻿keystore.properties
+*.jks
+
+# Build outputs
+.gradle/
+build/
+app/build/
+*.apk
+local.properties
+.kotlin/
+# Scripts
+Fix-AllWarnings.ps1
+Validate-AndroidStudioProject.ps1
