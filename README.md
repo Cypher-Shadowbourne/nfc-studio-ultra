@@ -1,6 +1,6 @@
 # NFC Studio Ultra
 
-A modular Android starter project for reading and writing NFC tags with a dark neon visual language inspired by my Cypher Shadobourne persoa
+A modular Android starter project for reading and writing NFC tags with a dark neon visual language inspired by my Cypher Shadobourne persona
 
 ## What is included
 
