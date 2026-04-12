@@ -1,4 +1,4 @@
-﻿package com.cyphershadowbourne.nfcstudioultra
+package com.cyphershadowbourne.nfcstudioultra
 
 import android.nfc.NfcAdapter
 import android.nfc.Tag
@@ -6,7 +6,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import com.cyphershadowbourne.nfcstudioultra.nfc.NdefRecordType
 import com.cyphershadowbourne.nfcstudioultra.nfc.NfcMode
 import com.cyphershadowbourne.nfcstudioultra.ui.NfcStudioViewModel
 import com.cyphershadowbourne.nfcstudioultra.ui.screen.NfcStudioUltraScreen
@@ -28,10 +27,10 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
                 NfcStudioUltraScreen(
                     state = state,
-                    onReadMode = { viewModel.setMode(NfcMode.READ) },
-                    onWriteMode = { viewModel.setMode(NfcMode.WRITE) },
-                    onEraseMode = { viewModel.setMode(NfcMode.ERASE) },
-                    onIdleMode = { viewModel.setMode(NfcMode.IDLE) },
+                    onReadMode = { setModeAndUpdateReader(NfcMode.READ) },
+                    onWriteMode = { setModeAndUpdateReader(NfcMode.WRITE) },
+                    onEraseMode = { setModeAndUpdateReader(NfcMode.ERASE) },
+                    onIdleMode = { setModeAndUpdateReader(NfcMode.IDLE) },
                     onWriteTypeSelected = viewModel::setWriteType,
                     onTextChanged = viewModel::updateText,
                     onUrlChanged = viewModel::updateUrl,
@@ -41,6 +40,12 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
                     onEmailBodyChanged = viewModel::updateEmailBody,
                     onSmsNumberChanged = viewModel::updateSmsNumber,
                     onSmsBodyChanged = viewModel::updateSmsBody,
+                    onLocationLatitudeChanged = viewModel::updateLocationLatitude,
+                    onLocationLongitudeChanged = viewModel::updateLocationLongitude,
+                    onContactNameChanged = viewModel::updateContactName,
+                    onContactPhoneChanged = viewModel::updateContactPhone,
+                    onContactEmailChanged = viewModel::updateContactEmail,
+                    onContactOrganizationChanged = viewModel::updateContactOrganization,
                     onConfirmAction = { viewModel.confirmPendingAction(this) },
                     onDismissAction = viewModel::dismissPendingAction,
                     onClearRead = viewModel::clearRead
@@ -51,13 +56,7 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
     override fun onResume() {
         super.onResume()
-
-        val flags = NfcAdapter.FLAG_READER_NFC_A or
-            NfcAdapter.FLAG_READER_NFC_B or
-            NfcAdapter.FLAG_READER_NFC_F or
-            NfcAdapter.FLAG_READER_NFC_V
-
-        nfcAdapter?.enableReaderMode(this, this, flags, null)
+        updateReaderMode()
     }
 
     override fun onPause() {
@@ -69,5 +68,26 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
         runOnUiThread {
             viewModel.onTag(tag, this)
         }
+    }
+
+    private fun setModeAndUpdateReader(mode: NfcMode) {
+        viewModel.setMode(mode)
+        updateReaderMode()
+    }
+
+    private fun updateReaderMode() {
+        val adapter = nfcAdapter ?: return
+
+        if (viewModel.uiState.mode == NfcMode.IDLE) {
+            adapter.disableReaderMode(this)
+            return
+        }
+
+        val flags = NfcAdapter.FLAG_READER_NFC_A or
+            NfcAdapter.FLAG_READER_NFC_B or
+            NfcAdapter.FLAG_READER_NFC_F or
+            NfcAdapter.FLAG_READER_NFC_V
+
+        adapter.enableReaderMode(this, this, flags, null)
     }
 }

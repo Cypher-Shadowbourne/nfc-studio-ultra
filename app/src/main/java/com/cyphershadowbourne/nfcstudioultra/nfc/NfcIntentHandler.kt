@@ -1,8 +1,9 @@
-﻿package com.cyphershadowbourne.nfcstudioultra.nfc
+package com.cyphershadowbourne.nfcstudioultra.nfc
 
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.ContactsContract
 import android.widget.Toast
 
 object NfcIntentHandler {
@@ -13,6 +14,8 @@ object NfcIntentHandler {
             is NdefContent.Phone -> openDialer(context, content.value)
             is NdefContent.Email -> openEmail(context, content)
             is NdefContent.Sms -> openSms(context, content)
+            is NdefContent.Location -> openLocation(context, content)
+            is NdefContent.Contact -> openContact(context, content)
             is NdefContent.Text -> {
                 if (content.value.isNotBlank() && content.value != "(Tag contains no readable content)") {
                     Toast.makeText(context, content.value, Toast.LENGTH_SHORT).show()
@@ -79,6 +82,34 @@ object NfcIntentHandler {
             context.startActivity(intent)
         } catch (_: Exception) {
             Toast.makeText(context, "No SMS app found.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openLocation(context: Context, value: NdefContent.Location) {
+        try {
+            val uri = Uri.parse("geo:${value.latitude},${value.longitude}?q=${value.latitude},${value.longitude}")
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(context, "No maps app found.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openContact(context: Context, value: NdefContent.Contact) {
+        try {
+            val intent = Intent(ContactsContract.Intents.Insert.ACTION).apply {
+                type = ContactsContract.RawContacts.CONTENT_TYPE
+                putExtra(ContactsContract.Intents.Insert.NAME, value.name)
+                putExtra(ContactsContract.Intents.Insert.PHONE, value.phone)
+                putExtra(ContactsContract.Intents.Insert.EMAIL, value.email)
+                putExtra(ContactsContract.Intents.Insert.COMPANY, value.organization)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(context, "No contacts app found.", Toast.LENGTH_SHORT).show()
         }
     }
 }

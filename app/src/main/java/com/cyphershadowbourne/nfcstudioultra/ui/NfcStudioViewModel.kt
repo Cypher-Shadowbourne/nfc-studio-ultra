@@ -1,4 +1,4 @@
-﻿package com.cyphershadowbourne.nfcstudioultra.ui
+package com.cyphershadowbourne.nfcstudioultra.ui
 
 import android.content.Context
 import android.nfc.Tag
@@ -101,6 +101,30 @@ class NfcStudioViewModel : ViewModel() {
 
     fun updateSmsBody(value: String) {
         updateWriteData(uiState.writeData.copy(smsBody = value))
+    }
+
+    fun updateLocationLatitude(value: String) {
+        updateWriteData(uiState.writeData.copy(locationLatitude = value))
+    }
+
+    fun updateLocationLongitude(value: String) {
+        updateWriteData(uiState.writeData.copy(locationLongitude = value))
+    }
+
+    fun updateContactName(value: String) {
+        updateWriteData(uiState.writeData.copy(contactName = value))
+    }
+
+    fun updateContactPhone(value: String) {
+        updateWriteData(uiState.writeData.copy(contactPhone = value))
+    }
+
+    fun updateContactEmail(value: String) {
+        updateWriteData(uiState.writeData.copy(contactEmail = value))
+    }
+
+    fun updateContactOrganization(value: String) {
+        updateWriteData(uiState.writeData.copy(contactOrganization = value))
     }
 
     fun clearRead() {
@@ -275,6 +299,16 @@ class NfcStudioViewModel : ViewModel() {
                 "SMS screen opened"
             }
 
+            is NdefContent.Location -> {
+                NfcIntentHandler.handle(context, content)
+                "Map opened"
+            }
+
+            is NdefContent.Contact -> {
+                NfcIntentHandler.handle(context, content)
+                "Contact screen opened"
+            }
+
             is NdefContent.Text -> "Read complete"
             is NdefContent.Unknown -> "Read complete"
         }
@@ -303,6 +337,8 @@ class NfcStudioViewModel : ViewModel() {
                 NdefRecordType.PHONE -> "Phone number updated"
                 NdefRecordType.EMAIL -> "Email updated"
                 NdefRecordType.SMS -> "SMS updated"
+                NdefRecordType.LOCATION -> "Location updated"
+                NdefRecordType.CONTACT -> "Contact updated"
             }
         )
     }
@@ -314,6 +350,20 @@ class NfcStudioViewModel : ViewModel() {
             NdefRecordType.PHONE -> writeData.phoneNumber.isNotBlank()
             NdefRecordType.EMAIL -> writeData.emailTo.isNotBlank()
             NdefRecordType.SMS -> writeData.smsNumber.isNotBlank()
+            NdefRecordType.LOCATION -> {
+                val latitude = writeData.locationLatitude.toDoubleOrNull()
+                val longitude = writeData.locationLongitude.toDoubleOrNull()
+                latitude != null &&
+                    longitude != null &&
+                    latitude in -90.0..90.0 &&
+                    longitude in -180.0..180.0
+            }
+            NdefRecordType.CONTACT -> {
+                writeData.contactName.isNotBlank() ||
+                    writeData.contactPhone.isNotBlank() ||
+                    writeData.contactEmail.isNotBlank() ||
+                    writeData.contactOrganization.isNotBlank()
+            }
         }
     }
 

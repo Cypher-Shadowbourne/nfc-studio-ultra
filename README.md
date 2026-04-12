@@ -1,62 +1,51 @@
 # NFC Studio Ultra
 
-A modular Android starter project for reading and writing NFC tags with a dark neon visual language inspired by my Cypher Shadobourne persona
+Android app for reading, writing, and erasing NFC tags with a neon-styled Jetpack Compose UI.
 
-## What is included
+## Features
 
-- Jetpack Compose UI
-- Reader mode based NFC discovery
-- NDEF text and URI writing
-- Basic NDEF parsing for reads
-- In-memory session history
-- Modular package layout so each major concern stays in its own file
+- Read NDEF tags in reader mode
+- Write `TEXT`, `URL`, `PHONE`, `EMAIL`, `SMS`, `LOCATION`, and `CONTACT` records
+- Erase NDEF tags
+- Auto-open supported reads such as links, phone, email, SMS, maps, and contact insert
+- Show basic tag details like type, writable state, size, and tech list
 
-## Current structure
+## Requirements
 
-```text
-nfc-studio-ultra/
-├── build.gradle.kts
-├── gradle.properties
-├── settings.gradle.kts
-├── README.md
-└── app/
-    ├── build.gradle.kts
-    ├── proguard-rules.pro
-    └── src/main/
-        ├── AndroidManifest.xml
-        ├── java/com/cyphershadowbourne/nfcstudioultra/
-        │   ├── MainActivity.kt
-        │   ├── data/repository/InMemoryHistoryRepository.kt
-        │   ├── domain/model/
-        │   ├── domain/repository/HistoryRepository.kt
-        │   ├── nfc/
-        │   ├── ui/
-        │   │   ├── NfcStudioUltraApp.kt
-        │   │   ├── components/
-        │   │   ├── screens/
-        │   │   ├── theme/
-        │   │   └── viewmodel/
-        │   └── util/
-        └── res/
+- Android Studio with a current Android SDK
+- Java 17
+- An NFC-capable Android device for real device testing
+
+## Local development
+
+1. Open the project in Android Studio.
+2. Let Gradle sync and install any missing SDK components.
+3. Build with `./gradlew assembleDebug` or from Android Studio.
+4. Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
+
+## Release signing
+
+Release signing is loaded from local configuration instead of tracked secrets.
+
+You can provide values through:
+
+- `keystore.properties` in the repo root
+- Gradle properties
+- Environment variables
+
+Example `keystore.properties`:
+
+```properties
+storeFile=nfc-studio-ultra-release.jks
+storePassword=your-password
+keyAlias=nfcstudioultra
+keyPassword=your-password
 ```
 
-## Build notes
+Use [keystore.properties.example](./keystore.properties.example) as a template. The real `keystore.properties` and `*.jks` files are gitignored.
 
-1. Open the project in a current Android Studio build.
-2. Let Android Studio install the matching Android SDK and Gradle components.
-3. Sync the project.
-4. Build a debug APK from the IDE.
+## Notes
 
-## Important constraints
-
-- This starter project uses an in-memory history store. If you want persistence next, replace that repository with Room or DataStore.
-- The project assumes NDEF-oriented tag workflows. Raw tech-specific operations such as Mifare Classic sector handling are not included yet.
-- I could not build the APK in this environment because the Android SDK and Gradle wrapper binaries are not available here.
-
-## Suggested next production steps
-
-- Add Room-backed history and saved presets.
-- Add input validation for URL and URI modes.
-- Add export/share for tag read history.
-- Add a dedicated diagnostics screen for tech capabilities and writable capacity.
-- Add UI tests and NFC parser unit tests.
+- The app currently targets NDEF-oriented workflows.
+- History/persistence from the older prototype flow is not wired into the current UI.
+- Raw low-level tag operations are not included yet.

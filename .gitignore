@@ -1,4 +1,4 @@
-﻿keystore.properties
+keystore.properties
 *.jks
 
 # Build outputs
@@ -8,6 +8,11 @@ app/build/
 *.apk
 local.properties
 .kotlin/
+
+# IDE files
+.idea/
+*.iml
+
 # Scripts
 Fix-AllWarnings.ps1
 Validate-AndroidStudioProject.ps1

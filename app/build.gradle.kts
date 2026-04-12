@@ -3,16 +3,44 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+import java.util.Properties
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.inputStream().use(keystoreProperties::load)
+}
+
+fun resolveSecret(name: String): String? {
+    return keystoreProperties.getProperty(name)
+        ?: providers.gradleProperty(name).orNull
+        ?: providers.environmentVariable(name).orNull
+}
+
+val releaseStoreFile = resolveSecret("storeFile")?.let(rootProject::file)
+val releaseStorePassword = resolveSecret("storePassword")
+val releaseKeyAlias = resolveSecret("keyAlias")
+val releaseKeyPassword = resolveSecret("keyPassword")
+val hasReleaseSigning = listOf(
+    releaseStoreFile?.exists() == true,
+    !releaseStorePassword.isNullOrBlank(),
+    !releaseKeyAlias.isNullOrBlank(),
+    !releaseKeyPassword.isNullOrBlank()
+).all { it }
+
 android {
     namespace = "com.cyphershadowbourne.nfcstudioultra"
     compileSdk = 36
 
     signingConfigs {
-        create("release") {
-            storeFile = rootProject.file("nfc-studio-ultra-release.jks")
-            storePassword = "12345qwe"
-            keyAlias = "nfcstudioultra"
-            keyPassword = "12345qwe"
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
 
@@ -38,7 +66,7 @@ android {
         release {
             isMinifyEnabled = false
             isShrinkResources = false
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

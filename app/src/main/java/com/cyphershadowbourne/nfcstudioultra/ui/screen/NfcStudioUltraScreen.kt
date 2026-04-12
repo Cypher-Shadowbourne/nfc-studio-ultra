@@ -74,6 +74,12 @@ fun NfcStudioUltraScreen(
     onEmailBodyChanged: (String) -> Unit,
     onSmsNumberChanged: (String) -> Unit,
     onSmsBodyChanged: (String) -> Unit,
+    onLocationLatitudeChanged: (String) -> Unit,
+    onLocationLongitudeChanged: (String) -> Unit,
+    onContactNameChanged: (String) -> Unit,
+    onContactPhoneChanged: (String) -> Unit,
+    onContactEmailChanged: (String) -> Unit,
+    onContactOrganizationChanged: (String) -> Unit,
     onConfirmAction: () -> Unit,
     onDismissAction: () -> Unit,
     onClearRead: () -> Unit
@@ -218,6 +224,26 @@ fun NfcStudioUltraScreen(
                     )
                 }
 
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    WriteTypeButton(
+                        title = "LOCATION",
+                        selected = state.writeData.type == NdefRecordType.LOCATION,
+                        onClick = { onWriteTypeSelected(NdefRecordType.LOCATION) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    WriteTypeButton(
+                        title = "CONTACT",
+                        selected = state.writeData.type == NdefRecordType.CONTACT,
+                        onClick = { onWriteTypeSelected(NdefRecordType.CONTACT) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(14.dp))
 
                 LabeledValue(
@@ -242,6 +268,7 @@ fun NfcStudioUltraScreen(
                             label = "Website",
                             value = state.writeData.url,
                             placeholder = "example.com",
+                            keyboardType = KeyboardType.Uri,
                             onValueChange = onUrlChanged
                         )
                     }
@@ -251,6 +278,7 @@ fun NfcStudioUltraScreen(
                             label = "Phone Number",
                             value = state.writeData.phoneNumber,
                             placeholder = "+441234567890",
+                            keyboardType = KeyboardType.Phone,
                             onValueChange = onPhoneChanged
                         )
                     }
@@ -260,6 +288,7 @@ fun NfcStudioUltraScreen(
                             label = "Email Address",
                             value = state.writeData.emailTo,
                             placeholder = "name@example.com",
+                            keyboardType = KeyboardType.Email,
                             onValueChange = onEmailToChanged
                         )
                         Spacer(modifier = Modifier.height(10.dp))
@@ -284,6 +313,7 @@ fun NfcStudioUltraScreen(
                             label = "Phone Number",
                             value = state.writeData.smsNumber,
                             placeholder = "+441234567890",
+                            keyboardType = KeyboardType.Phone,
                             onValueChange = onSmsNumberChanged
                         )
                         Spacer(modifier = Modifier.height(10.dp))
@@ -293,6 +323,56 @@ fun NfcStudioUltraScreen(
                             placeholder = "Type your message",
                             minLines = 3,
                             onValueChange = onSmsBodyChanged
+                        )
+                    }
+
+                    NdefRecordType.LOCATION -> {
+                        UltraTextField(
+                            label = "Latitude",
+                            value = state.writeData.locationLatitude,
+                            placeholder = "53.3498",
+                            keyboardType = KeyboardType.Decimal,
+                            onValueChange = onLocationLatitudeChanged
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        UltraTextField(
+                            label = "Longitude",
+                            value = state.writeData.locationLongitude,
+                            placeholder = "-6.2603",
+                            keyboardType = KeyboardType.Decimal,
+                            onValueChange = onLocationLongitudeChanged
+                        )
+                    }
+
+                    NdefRecordType.CONTACT -> {
+                        UltraTextField(
+                            label = "Name",
+                            value = state.writeData.contactName,
+                            placeholder = "Cypher Shadowbourne",
+                            onValueChange = onContactNameChanged
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        UltraTextField(
+                            label = "Phone Number",
+                            value = state.writeData.contactPhone,
+                            placeholder = "+441234567890",
+                            keyboardType = KeyboardType.Phone,
+                            onValueChange = onContactPhoneChanged
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        UltraTextField(
+                            label = "Email",
+                            value = state.writeData.contactEmail,
+                            placeholder = "name@example.com",
+                            keyboardType = KeyboardType.Email,
+                            onValueChange = onContactEmailChanged
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        UltraTextField(
+                            label = "Organization",
+                            value = state.writeData.contactOrganization,
+                            placeholder = "Studio Ultra",
+                            onValueChange = onContactOrganizationChanged
                         )
                     }
                 }
@@ -710,6 +790,7 @@ private fun UltraTextField(
     value: String,
     placeholder: String,
     minLines: Int = 1,
+    keyboardType: KeyboardType = KeyboardType.Text,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
@@ -721,7 +802,7 @@ private fun UltraTextField(
         minLines = minLines,
         maxLines = if (minLines > 1) 6 else 1,
         shape = RoundedCornerShape(18.dp),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         colors = neonTextFieldColors()
     )
 }

@@ -1,4 +1,4 @@
-﻿package com.cyphershadowbourne.nfcstudioultra.nfc
+package com.cyphershadowbourne.nfcstudioultra.nfc
 
 import android.net.Uri
 import android.nfc.NdefMessage
@@ -8,6 +8,7 @@ import android.nfc.tech.Ndef
 import android.nfc.tech.NdefFormatable
 import java.io.IOException
 import java.nio.charset.Charset
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -234,6 +235,30 @@ class NfcManager {
                     NdefRecord.createUri(uri)
                 }
             }
+
+            NdefRecordType.LOCATION -> {
+                val latitude = writeData.locationLatitude.trim().toDoubleOrNull()
+                val longitude = writeData.locationLongitude.trim().toDoubleOrNull()
+                if (
+                    latitude == null ||
+                    longitude == null ||
+                    latitude !in -90.0..90.0 ||
+                    longitude !in -180.0..180.0
+                ) {
+                    null
+                } else {
+                    NdefRecord.createUri(
+                        String.format(
+                            Locale.US,
+                            "geo:%1$.6f,%2$.6f",
+                            latitude,
+                            longitude
+                        )
+                    )
+                }
+            }
+
+            NdefRecordType.CONTACT -> createContactRecord(writeData)
         }
 
         return record?.let { NdefMessage(arrayOf(it)) }
@@ -258,6 +283,7 @@ class NfcManager {
             isEmptyRecord(record) -> NdefContent.Text("(Empty tag)")
             isTextRecord(record) -> NdefContent.Text(parseTextRecord(record))
             isUriRecord(record) -> parseUriContent(parseUriRecord(record))
+            isVCardRecord(record) -> parseVCardContent(record)
             else -> {
                 try {
                     val bytes = record.payload
@@ -306,6 +332,18 @@ class NfcManager {
                 )
             }
 
+            trimmed.startsWith("geo:", ignoreCase = true) -> {
+                val coordinates = trimmed.substringAfter("geo:").substringBefore("?")
+                val latitude = coordinates.substringBefore(",").toDoubleOrNull()
+                val longitude = coordinates.substringAfter(",", "").toDoubleOrNull()
+
+                if (latitude != null && longitude != null) {
+                    NdefContent.Location(latitude = latitude, longitude = longitude)
+                } else {
+                    NdefContent.Unknown(trimmed)
+                }
+            }
+
             trimmed.startsWith("http://", ignoreCase = true) ||
                 trimmed.startsWith("https://", ignoreCase = true) ||
                 trimmed.startsWith("www.", ignoreCase = true) ->
@@ -333,6 +371,25 @@ class NfcManager {
                 append("SMS to: ${content.number}")
                 if (content.body.isNotBlank()) {
                     append("\nMessage: ${content.body}")
+                }
+            }
+            is NdefContent.Location -> String.format(
+                Locale.US,
+                "Location: %.6f, %.6f",
+                content.latitude,
+                content.longitude
+            )
+            is NdefContent.Contact -> buildString {
+                append("Contact: ")
+                append(content.name.ifBlank { "(No name)" })
+                if (content.phone.isNotBlank()) {
+                    append("\nPhone: ${content.phone}")
+                }
+                if (content.email.isNotBlank()) {
+                    append("\nEmail: ${content.email}")
+                }
+                if (content.organization.isNotBlank()) {
+                    append("\nOrg: ${content.organization}")
                 }
             }
             is NdefContent.Unknown -> content.raw
@@ -385,6 +442,66 @@ class NfcManager {
         return uri.build().toString()
     }
 
+    private fun createContactRecord(writeData: NdefWriteData): NdefRecord? {
+        val name = writeData.contactName.trim()
+        val phone = writeData.contactPhone.trim()
+        val email = writeData.contactEmail.trim()
+        val organization = writeData.contactOrganization.trim()
+
+        if (
+            name.isBlank() &&
+            phone.isBlank() &&
+            email.isBlank() &&
+            organization.isBlank()
+        ) {
+            return null
+        }
+
+        val payload = buildString {
+            appendLine("BEGIN:VCARD")
+            appendLine("VERSION:3.0")
+            if (name.isNotBlank()) appendLine("FN:${escapeVCardValue(name)}")
+            if (organization.isNotBlank()) appendLine("ORG:${escapeVCardValue(organization)}")
+            if (phone.isNotBlank()) appendLine("TEL:${escapeVCardValue(phone)}")
+            if (email.isNotBlank()) appendLine("EMAIL:${escapeVCardValue(email)}")
+            append("END:VCARD")
+        }.toByteArray(Charsets.UTF_8)
+
+        return NdefRecord.createMime("text/x-vCard", payload)
+    }
+
+    private fun parseVCardContent(record: NdefRecord): NdefContent {
+        val text = record.payload.toString(Charsets.UTF_8)
+        val fields = mutableMapOf<String, String>()
+
+        text.lineSequence()
+            .map(String::trim)
+            .filter { it.contains(':') }
+            .forEach { line ->
+                val rawKey = line.substringBefore(':')
+                val key = rawKey.substringBefore(';').uppercase(Locale.US)
+                val value = line.substringAfter(':').trim()
+                if (value.isNotBlank() && key !in fields) {
+                    fields[key] = value
+                }
+            }
+
+        return NdefContent.Contact(
+            name = fields["FN"].orEmpty(),
+            phone = fields["TEL"].orEmpty(),
+            email = fields["EMAIL"].orEmpty(),
+            organization = fields["ORG"].orEmpty()
+        )
+    }
+
+    private fun escapeVCardValue(value: String): String {
+        return value
+            .replace("\\", "\\\\")
+            .replace(";", "\\;")
+            .replace(",", "\\,")
+            .replace("\n", "\\n")
+    }
+
     private fun isEmptyRecord(record: NdefRecord): Boolean {
         return record.tnf == NdefRecord.TNF_EMPTY &&
             record.type.isEmpty() &&
@@ -400,6 +517,11 @@ class NfcManager {
     private fun isUriRecord(record: NdefRecord): Boolean {
         return record.tnf == NdefRecord.TNF_WELL_KNOWN &&
             record.type.contentEquals(NdefRecord.RTD_URI)
+    }
+
+    private fun isVCardRecord(record: NdefRecord): Boolean {
+        return record.tnf == NdefRecord.TNF_MIME_MEDIA &&
+            record.type.toString(Charsets.US_ASCII).equals("text/x-vcard", ignoreCase = true)
     }
 
     private fun parseTextRecord(record: NdefRecord): String {
