@@ -8,6 +8,7 @@ import android.nfc.tech.Ndef
 import android.nfc.tech.NdefFormatable
 import java.io.IOException
 import java.nio.charset.Charset
+import java.util.Arrays
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -35,14 +36,20 @@ class NfcManager {
 
         executor.execute {
             try {
+                NfcLog.operationStarted(mode)
                 val result = when (mode) {
                     NfcMode.READ -> readTag(tag)
                     NfcMode.WRITE -> writeTag(tag, writeData)
+                    NfcMode.MULTI_WRITE -> NfcOperationResult.Error("Use processMultiTag for multi-write.")
+                    NfcMode.CLONE -> readForClone(tag)
+                    NfcMode.COMPARE -> readForCompare(tag)
                     NfcMode.ERASE -> eraseTag(tag)
                     NfcMode.IDLE -> NfcOperationResult.Error("Idle mode.")
                 }
+                NfcLog.operationCompleted(mode, result)
                 callback(result)
             } catch (t: Throwable) {
+                NfcLog.e("NFC operation failed during $mode", t)
                 callback(NfcOperationResult.Error("NFC operation failed: ${t.message ?: "unknown error"}"))
             } finally {
                 try {
@@ -52,6 +59,100 @@ class NfcManager {
                 processing.set(false)
             }
         }
+    }
+
+    fun processMultiTag(
+        tag: Tag,
+        writeDataList: List<NdefWriteData>,
+        callback: (NfcOperationResult) -> Unit
+    ) {
+        if (!processing.compareAndSet(false, true)) {
+            callback(NfcOperationResult.Ignored("Another NFC action is already running."))
+            return
+        }
+
+        executor.execute {
+            try {
+                NfcLog.operationStarted(NfcMode.MULTI_WRITE)
+                val result = writeMultiTag(tag, writeDataList)
+                NfcLog.operationCompleted(NfcMode.MULTI_WRITE, result)
+                callback(result)
+            } catch (t: Throwable) {
+                NfcLog.e("NFC multi-write operation failed", t)
+                callback(NfcOperationResult.Error("NFC operation failed: ${t.message ?: "unknown error"}"))
+            } finally {
+                try {
+                    Thread.sleep(500)
+                } catch (_: InterruptedException) {
+                }
+                processing.set(false)
+            }
+        }
+    }
+
+    fun processCloneWrite(
+        tag: Tag,
+        message: NdefMessage,
+        callback: (NfcOperationResult) -> Unit
+    ) {
+        if (!processing.compareAndSet(false, true)) {
+            callback(NfcOperationResult.Ignored("Another NFC action is already running."))
+            return
+        }
+
+        executor.execute {
+            try {
+                NfcLog.operationStarted(NfcMode.CLONE)
+                val result = writeCloneTag(tag, message)
+                NfcLog.operationCompleted(NfcMode.CLONE, result)
+                callback(result)
+            } catch (t: Throwable) {
+                NfcLog.e("NFC clone write operation failed", t)
+                callback(NfcOperationResult.Error("NFC operation failed: ${t.message ?: "unknown error"}"))
+            } finally {
+                try {
+                    Thread.sleep(500)
+                } catch (_: InterruptedException) {
+                }
+                processing.set(false)
+            }
+        }
+    }
+
+    private fun readForCompare(tag: Tag): NfcOperationResult {
+        val ndef = Ndef.get(tag)
+        val techList = tag.techList.map { it.substringAfterLast('.') }
+        
+        val tagInfo = if (ndef != null) {
+            try {
+                ndef.connect()
+                val message = ndef.ndefMessage ?: ndef.cachedNdefMessage
+                
+                TagInfo(
+                    recordCount = message?.records?.size ?: 0,
+                    recordTypes = message?.records?.map { it.type.toString(Charsets.US_ASCII) } ?: emptyList(),
+                    decodedValues = message?.records?.map { parseRecord(it).toDisplayText() } ?: emptyList(),
+                    isWritable = ndef.isWritable,
+                    sizeBytes = ndef.maxSize,
+                    techList = techList
+                )
+            } catch (e: Exception) {
+                TagInfo(0, emptyList(), emptyList(), false, 0, techList)
+            } finally {
+                safeClose(ndef)
+            }
+        } else {
+            TagInfo(0, emptyList(), emptyList(), false, 0, techList)
+        }
+        
+        return NfcOperationResult.CompareSuccess(
+            result = TagComparisonResult(
+                areEqual = false,
+                differences = emptyList(),
+                tag1 = tagInfo,
+                tag2 = tagInfo
+            )
+        )
     }
 
     private fun readTag(tag: Tag): NfcOperationResult {
@@ -64,18 +165,33 @@ class NfcManager {
 
                 val message = ndef.ndefMessage ?: ndef.cachedNdefMessage
                 val parsedContent = parseMessage(message)
+                val parsedRecords = message?.records?.map { record ->
+                    ParsedNdefRecord(
+                        type = record.type.toString(Charsets.US_ASCII),
+                        tnf = tnfToString(record.tnf),
+                        payloadHex = record.payload.joinToString("") { "%02X".format(it) },
+                        decodedValue = parseRecord(record).toDisplayText()
+                    )
+                } ?: emptyList()
 
+                NfcLog.d("Read NDEF message: $message")
                 NfcOperationResult.ReadSuccess(
                     content = parsedContent,
-                    displayText = buildDisplayText(parsedContent),
+                    displayText = parsedContent.toDisplayText(),
                     details = buildString {
                         appendLine("Type: ${ndef.type ?: "Unknown"}")
                         appendLine("Writable: ${ndef.isWritable}")
                         appendLine("Max size: ${ndef.maxSize} bytes")
                         append("Tech: $techList")
-                    }
+                    },
+                    techList = tag.techList.map { it.substringAfterLast('.') },
+                    isWritable = ndef.isWritable,
+                    sizeBytes = ndef.maxSize,
+                    tagIdHex = tag.id.joinToString("") { "%02X".format(it) },
+                    records = parsedRecords
                 )
             } catch (e: Exception) {
+                NfcLog.w("Read failed: ${e.message}", e)
                 NfcOperationResult.Error("Read failed: ${e.message ?: "unknown error"}")
             } finally {
                 safeClose(ndef)
@@ -94,7 +210,69 @@ class NfcManager {
         )
     }
 
+    private fun readForClone(tag: Tag): NfcOperationResult {
+        val ndef = Ndef.get(tag)
+        if (ndef == null) return NfcOperationResult.Error("Source tag does not support NDEF.")
+
+        return try {
+            ndef.connect()
+            val message = ndef.ndefMessage ?: ndef.cachedNdefMessage
+            if (message == null) {
+                NfcOperationResult.Error("Source tag is empty.")
+            } else {
+                val content = parseMessage(message)
+                NfcOperationResult.ReadSuccess(
+                    content = content,
+                    displayText = content.toDisplayText(),
+                    details = "Payload for cloning: ${message.toByteArray().size} bytes",
+                    tagIdHex = tag.id.joinToString("") { "%02X".format(it) },
+                    rawMessage = message,
+                    records = message.records.map { record ->
+                        ParsedNdefRecord(
+                            type = record.type.toString(Charsets.US_ASCII),
+                            tnf = tnfToString(record.tnf),
+                            payloadHex = record.payload.joinToString("") { "%02X".format(it) },
+                            decodedValue = parseRecord(record).toDisplayText()
+                        )
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            NfcOperationResult.Error("Failed to read source: ${e.message}")
+        } finally {
+            safeClose(ndef)
+        }
+    }
+
+    private fun writeCloneTag(tag: Tag, message: NdefMessage): NfcOperationResult {
+        val ndef = Ndef.get(tag)
+        if (ndef != null) {
+            try {
+                ndef.connect()
+                val payloadSize = message.toByteArray().size
+                if (ndef.maxSize < payloadSize) {
+                    return NfcOperationResult.Error("Destination tag too small. Need $payloadSize bytes, have ${ndef.maxSize} bytes.")
+                }
+                if (!ndef.isWritable) {
+                    return NfcOperationResult.Error("Destination tag is not writable.")
+                }
+            } catch (e: Exception) {
+                // Ignore for now, writeMessageToTag will handle it
+            } finally {
+                safeClose(ndef)
+            }
+        }
+
+        val result = writeMessageToTag(tag, message, "Clone complete.")
+        return if (result is NfcOperationResult.WriteSuccess) {
+            NfcOperationResult.CloneSuccess(result.message, result.verificationStatus)
+        } else {
+            result
+        }
+    }
+
     private fun writeTag(tag: Tag, writeData: NdefWriteData): NfcOperationResult {
+        NfcLog.d("Preparing to write: $writeData")
         val message = createMessageForWriteData(writeData)
             ?: return NfcOperationResult.Error("Enter valid data before WRITE.")
 
@@ -149,7 +327,21 @@ class NfcManager {
                 }
 
                 ndef.writeNdefMessage(message)
-                NfcOperationResult.WriteSuccess(successMessage)
+
+                // Post-write verification
+                val verificationStatus = try {
+                    val readBackMessage = ndef.ndefMessage ?: ndef.cachedNdefMessage
+                    if (readBackMessage != null && areMessagesEquivalent(message, readBackMessage)) {
+                        VerificationStatus.VERIFIED
+                    } else {
+                        VerificationStatus.MISMATCH
+                    }
+                } catch (e: Exception) {
+                    NfcLog.w("Verification read failed: ${e.message}")
+                    VerificationStatus.UNAVAILABLE
+                }
+
+                NfcOperationResult.WriteSuccess(successMessage, verificationStatus)
             } catch (e: Exception) {
                 NfcOperationResult.Error("Write failed: ${e.message ?: "unknown error"}")
             } finally {
@@ -162,7 +354,8 @@ class NfcManager {
             return try {
                 formatable.connect()
                 formatable.format(message)
-                NfcOperationResult.WriteSuccess(successMessage)
+                // Verification for formatable tags is tricky because they might need a reconnect as Ndef
+                NfcOperationResult.WriteSuccess(successMessage, VerificationStatus.UNAVAILABLE)
             } catch (e: Exception) {
                 NfcOperationResult.Error("Format/write failed: ${e.message ?: "unknown error"}")
             } finally {
@@ -173,100 +366,184 @@ class NfcManager {
         return NfcOperationResult.Error("Tag does not support NDEF.")
     }
 
+    private fun areMessagesEquivalent(m1: NdefMessage, m2: NdefMessage): Boolean {
+        val b1 = m1.toByteArray()
+        val b2 = m2.toByteArray()
+        return b1.contentEquals(b2)
+    }
+
     private fun createMessageForWriteData(writeData: NdefWriteData): NdefMessage? {
-        val record = when (writeData.type) {
-            NdefRecordType.TEXT -> {
-                if (writeData.text.isBlank()) {
-                    null
-                } else {
-                    createTextRecord(writeData.text)
-                }
-            }
+        return try {
+            val record = createRecordForWriteData(writeData)
+            record?.let { NdefMessage(arrayOf(it)) }
+        } catch (e: Exception) {
+            NfcLog.e("Error creating write message: ${e.message}", e)
+            null
+        }
+    }
 
-            NdefRecordType.URL -> {
-                val value = writeData.url.trim()
-                if (value.isBlank()) {
-                    null
-                } else {
-                    val normalized = if (
-                        value.startsWith("http://", ignoreCase = true) ||
-                        value.startsWith("https://", ignoreCase = true)
-                    ) {
-                        value
-                    } else {
-                        "https://$value"
-                    }
-                    NdefRecord.createUri(normalized)
-                }
-            }
-
-            NdefRecordType.PHONE -> {
-                val value = writeData.phoneNumber.trim()
-                if (value.isBlank()) {
-                    null
-                } else {
-                    NdefRecord.createUri("tel:$value")
-                }
-            }
-
-            NdefRecordType.EMAIL -> {
-                val to = writeData.emailTo.trim()
-                if (to.isBlank()) {
-                    null
-                } else {
-                    val uri = buildEmailUri(
-                        to = to,
-                        subject = writeData.emailSubject,
-                        body = writeData.emailBody
-                    )
-                    NdefRecord.createUri(uri)
-                }
-            }
-
-            NdefRecordType.SMS -> {
-                val number = writeData.smsNumber.trim()
-                if (number.isBlank()) {
-                    null
-                } else {
-                    val uri = buildSmsUri(
-                        number = number,
-                        body = writeData.smsBody
-                    )
-                    NdefRecord.createUri(uri)
-                }
-            }
-
-            NdefRecordType.LOCATION -> {
-                val latitude = writeData.locationLatitude.trim().toDoubleOrNull()
-                val longitude = writeData.locationLongitude.trim().toDoubleOrNull()
-                if (
-                    latitude == null ||
-                    longitude == null ||
-                    latitude !in -90.0..90.0 ||
-                    longitude !in -180.0..180.0
-                ) {
-                    null
-                } else {
-                    NdefRecord.createUri(
-                        String.format(
-                            Locale.US,
-                            "geo:%1$.6f,%2$.6f",
-                            latitude,
-                            longitude
-                        )
-                    )
-                }
-            }
-
-            NdefRecordType.CONTACT -> createContactRecord(writeData)
+    private fun writeMultiTag(tag: Tag, writeDataList: List<NdefWriteData>): NfcOperationResult {
+        NfcLog.d("Preparing to multi-write: ${writeDataList.size} records")
+        val records = writeDataList.mapNotNull { createRecordForWriteData(it) }
+        
+        if (records.isEmpty()) {
+            return NfcOperationResult.Error("No valid records to write.")
         }
 
-        return record?.let { NdefMessage(arrayOf(it)) }
+        val message = NdefMessage(records.toTypedArray())
+        val result = writeMessageToTag(tag, message, "Multi-write successful.")
+        
+        return if (result is NfcOperationResult.WriteSuccess) {
+            NfcOperationResult.MultiWriteSuccess(result.message, result.verificationStatus)
+        } else {
+            result
+        }
+    }
+
+    private fun createRecordForWriteData(writeData: NdefWriteData): NdefRecord? {
+        return try {
+            when (writeData.type) {
+                NdefRecordType.TEXT -> {
+                    if (writeData.text.isBlank()) null else createTextRecord(writeData.text)
+                }
+                NdefRecordType.URL -> {
+                    val value = writeData.url.trim()
+                    if (value.isBlank()) null else {
+                        val normalized = if (value.startsWith("http://", ignoreCase = true) || value.startsWith("https://", ignoreCase = true)) value else "https://$value"
+                        NdefRecord.createUri(normalized)
+                    }
+                }
+                NdefRecordType.PHONE -> {
+                    val value = writeData.phoneNumber.trim()
+                    if (value.isBlank()) null else NdefRecord.createUri("tel:$value")
+                }
+                NdefRecordType.EMAIL -> {
+                    val to = writeData.emailTo.trim()
+                    if (to.isBlank()) null else {
+                        val uri = buildEmailUri(to = to, subject = writeData.emailSubject, body = writeData.emailBody)
+                        NdefRecord.createUri(uri)
+                    }
+                }
+                NdefRecordType.SMS -> {
+                    val number = writeData.smsNumber.trim()
+                    if (number.isBlank()) null else {
+                        val uri = buildSmsUri(number = number, body = writeData.smsBody)
+                        NdefRecord.createUri(uri)
+                    }
+                }
+                NdefRecordType.LOCATION -> {
+                    val latitude = writeData.locationLatitude.trim().toDoubleOrNull()
+                    val longitude = writeData.locationLongitude.trim().toDoubleOrNull()
+                    if (latitude == null || longitude == null || latitude !in -90.0..90.0 || longitude !in -180.0..180.0) null
+                    else NdefRecord.createUri(String.format(Locale.US, "geo:%1$.6f,%2$.6f", latitude, longitude))
+                }
+                NdefRecordType.CONTACT -> createContactRecord(writeData)
+                NdefRecordType.WIFI -> createWifiRecord(writeData)
+                NdefRecordType.CALENDAR -> createCalendarRecord(writeData)
+                NdefRecordType.SMART_POSTER -> createSmartPosterRecord(writeData)
+                NdefRecordType.AAR -> createAarRecord(writeData)
+                NdefRecordType.MIME -> createMimeRecord(writeData)
+                NdefRecordType.EXTERNAL -> createExternalRecord(writeData)
+            }
+        } catch (e: Exception) {
+            NfcLog.e("Error creating record: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun createWifiRecord(data: NdefWriteData): NdefRecord? {
+        return try {
+            // Simplified Wi-Fi payload (Android 10+ uses NDEF for Wi-Fi but many systems use this simple text format)
+            // Or use the standard Wi-Fi configuration format if available.
+            // For now, let's use the standard NDEF Wi-Fi Configuration record type "application/vnd.wfa.wsc"
+            // but simplified payload for compatibility.
+            val ssid = "S:${data.wifiSsid};"
+            val auth = "T:${data.wifiAuthType.replace("/", "")};"
+            val pass = if (data.wifiPassword.isNotBlank()) "P:${data.wifiPassword};" else ""
+            val hidden = "" // Could add hidden network flag
+            val payload = "WIFI:$ssid$auth$pass$hidden;".toByteArray(Charsets.UTF_8)
+            NdefRecord.createMime("application/vnd.wfa.wsc", payload)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun createCalendarRecord(data: NdefWriteData): NdefRecord? {
+        return try {
+            val vEvent = buildString {
+                append("BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\n")
+                append("SUMMARY:${data.calendarTitle}\n")
+                if (data.calendarLocation.isNotBlank()) append("LOCATION:${data.calendarLocation}\n")
+                if (data.calendarDescription.isNotBlank()) append("DESCRIPTION:${data.calendarDescription}\n")
+                // Format: YYYYMMDDTHHMMSSZ (simplified for now)
+                val start = data.calendarStart.replace("-", "").replace(" ", "T").replace(":", "") + "00Z"
+                append("DTSTART:$start\n")
+                if (data.calendarEnd.isNotBlank()) {
+                    val end = data.calendarEnd.replace("-", "").replace(" ", "T").replace(":", "") + "00Z"
+                    append("DTEND:$end\n")
+                }
+                append("END:VEVENT\nEND:VCALENDAR")
+            }.toByteArray(Charsets.UTF_8)
+            NdefRecord.createMime("text/calendar", vEvent)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun createSmartPosterRecord(data: NdefWriteData): NdefRecord? {
+        return try {
+            // A Smart Poster consists of a URI and a Title
+            val titleRecord = createTextRecord(data.smartPosterTitle)
+            val uriRecord = NdefRecord.createUri(data.url)
+            val message = NdefMessage(titleRecord, uriRecord)
+            NdefRecord(NdefRecord.TNF_WELL_KNOWN, NdefRecord.RTD_SMART_POSTER, null, message.toByteArray())
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun createAarRecord(data: NdefWriteData): NdefRecord? {
+        return try {
+            NdefRecord.createApplicationRecord(data.aarPackageName)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun createMimeRecord(data: NdefWriteData): NdefRecord? {
+        return try {
+            val payload = if (data.mimeIsHex) {
+                data.mimePayload.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            } else {
+                data.mimePayload.toByteArray(Charsets.UTF_8)
+            }
+            NdefRecord.createMime(data.mimeType, payload)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun createExternalRecord(data: NdefWriteData): NdefRecord? {
+        return try {
+            val payload = if (data.externalIsHex) {
+                data.externalPayload.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            } else {
+                data.externalPayload.toByteArray(Charsets.UTF_8)
+            }
+            NdefRecord.createExternal(data.externalDomain, data.externalType, payload)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun parseMessage(message: NdefMessage?): NdefContent {
         if (message == null || message.records.isEmpty()) {
             return NdefContent.Text("(Empty tag)")
+        }
+
+        if (message.records.size > 1) {
+            val records = message.records.map { parseRecord(it) }
+            return NdefContent.Multi(records)
         }
 
         val firstRecord = message.records.first()
@@ -284,6 +561,53 @@ class NfcManager {
             isTextRecord(record) -> NdefContent.Text(parseTextRecord(record))
             isUriRecord(record) -> parseUriContent(parseUriRecord(record))
             isVCardRecord(record) -> parseVCardContent(record)
+            record.tnf == NdefRecord.TNF_WELL_KNOWN && Arrays.equals(record.type, NdefRecord.RTD_SMART_POSTER) -> {
+                try {
+                    val subMessage = NdefMessage(record.payload)
+                    var title = ""
+                    var uri = ""
+                    for (subRecord in subMessage.records) {
+                        if (isTextRecord(subRecord)) title = parseTextRecord(subRecord)
+                        if (isUriRecord(subRecord)) uri = parseUriRecord(subRecord)
+                    }
+                    NdefContent.SmartPoster(title, uri)
+                } catch (e: Exception) {
+                    NdefContent.Unknown("Smart Poster (Malformed)")
+                }
+            }
+            record.tnf == NdefRecord.TNF_EXTERNAL_TYPE && Arrays.equals(record.type, "android.com:pkg".toByteArray(Charsets.US_ASCII)) -> {
+                NdefContent.Aar(String(record.payload, Charsets.UTF_8))
+            }
+            record.tnf == NdefRecord.TNF_MIME_MEDIA -> {
+                val mimeType = String(record.type, Charsets.US_ASCII)
+                val payloadStr = String(record.payload, Charsets.UTF_8)
+                when (mimeType) {
+                    "application/vnd.wfa.wsc" -> {
+                        if (payloadStr.contains("WIFI:S:")) {
+                            val ssid = payloadStr.substringAfter("S:").substringBefore(";")
+                            val auth = payloadStr.substringAfter("T:").substringBefore(";")
+                            val pass = if (payloadStr.contains("P:")) payloadStr.substringAfter("P:").substringBefore(";") else ""
+                            NdefContent.Wifi(ssid, auth, pass)
+                        } else {
+                            NdefContent.MimeRecord(mimeType, payloadStr)
+                        }
+                    }
+                    "text/calendar" -> {
+                        val title = payloadStr.substringAfter("SUMMARY:").substringBefore("\n")
+                        val start = payloadStr.substringAfter("DTSTART:").substringBefore("\n")
+                        val loc = payloadStr.substringAfter("LOCATION:").substringBefore("\n")
+                        NdefContent.Calendar(title, start, loc)
+                    }
+                    else -> NdefContent.MimeRecord(mimeType, payloadStr)
+                }
+            }
+            record.tnf == NdefRecord.TNF_EXTERNAL_TYPE -> {
+                val typeStr = String(record.type, Charsets.US_ASCII)
+                val parts = typeStr.split(":")
+                val domain = parts.getOrNull(0) ?: ""
+                val type = parts.getOrNull(1) ?: ""
+                NdefContent.ExternalRecord(domain, type, String(record.payload, Charsets.UTF_8))
+            }
             else -> {
                 try {
                     val bytes = record.payload
@@ -340,59 +664,11 @@ class NfcManager {
                 if (latitude != null && longitude != null) {
                     NdefContent.Location(latitude = latitude, longitude = longitude)
                 } else {
-                    NdefContent.Unknown(trimmed)
+                    NdefContent.Url(trimmed)
                 }
             }
-
-            trimmed.startsWith("http://", ignoreCase = true) ||
-                trimmed.startsWith("https://", ignoreCase = true) ||
-                trimmed.startsWith("www.", ignoreCase = true) ->
-                NdefContent.Url(trimmed)
 
             else -> NdefContent.Url(trimmed)
-        }
-    }
-
-    private fun buildDisplayText(content: NdefContent): String {
-        return when (content) {
-            is NdefContent.Text -> content.value
-            is NdefContent.Url -> content.value
-            is NdefContent.Phone -> "Phone: ${content.value}"
-            is NdefContent.Email -> buildString {
-                append("Email to: ${content.to}")
-                if (content.subject.isNotBlank()) {
-                    append("\nSubject: ${content.subject}")
-                }
-                if (content.body.isNotBlank()) {
-                    append("\nBody: ${content.body}")
-                }
-            }
-            is NdefContent.Sms -> buildString {
-                append("SMS to: ${content.number}")
-                if (content.body.isNotBlank()) {
-                    append("\nMessage: ${content.body}")
-                }
-            }
-            is NdefContent.Location -> String.format(
-                Locale.US,
-                "Location: %.6f, %.6f",
-                content.latitude,
-                content.longitude
-            )
-            is NdefContent.Contact -> buildString {
-                append("Contact: ")
-                append(content.name.ifBlank { "(No name)" })
-                if (content.phone.isNotBlank()) {
-                    append("\nPhone: ${content.phone}")
-                }
-                if (content.email.isNotBlank()) {
-                    append("\nEmail: ${content.email}")
-                }
-                if (content.organization.isNotBlank()) {
-                    append("\nOrg: ${content.organization}")
-                }
-            }
-            is NdefContent.Unknown -> content.raw
         }
     }
 
@@ -558,6 +834,19 @@ class NfcManager {
                 is NdefFormatable -> closeable.close()
             }
         } catch (_: IOException) {
+        }
+    }
+
+    private fun tnfToString(tnf: Short): String {
+        return when (tnf) {
+            NdefRecord.TNF_EMPTY -> "Empty"
+            NdefRecord.TNF_WELL_KNOWN -> "Well Known"
+            NdefRecord.TNF_MIME_MEDIA -> "MIME Media"
+            NdefRecord.TNF_ABSOLUTE_URI -> "Absolute URI"
+            NdefRecord.TNF_EXTERNAL_TYPE -> "External Type"
+            NdefRecord.TNF_UNKNOWN -> "Unknown"
+            NdefRecord.TNF_UNCHANGED -> "Unchanged"
+            else -> "Reserved"
         }
     }
 

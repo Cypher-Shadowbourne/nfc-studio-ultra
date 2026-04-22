@@ -4,5 +4,8 @@ enum class NfcMode {
     IDLE,
     READ,
     WRITE,
-    ERASE
+    MULTI_WRITE,
+    CLONE,
+    ERASE,
+    COMPARE
 }

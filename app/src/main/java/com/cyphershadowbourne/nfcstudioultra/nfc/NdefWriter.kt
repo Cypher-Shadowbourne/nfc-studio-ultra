@@ -10,6 +10,7 @@ object NdefWriter {
 
     fun write(tag: Tag, message: NdefMessage): Result<Unit> {
         return runCatching {
+            NfcLog.d("Attempting to write NDEF message...")
             val ndef = Ndef.get(tag)
             if (ndef != null) {
                 ndef.connect()
@@ -20,6 +21,7 @@ object NdefWriter {
                         "Tag capacity is ${ndef.maxSize} bytes, but payload requires $size bytes."
                     }
                     ndef.writeNdefMessage(message)
+                    NfcLog.i("Successfully wrote NDEF message to existing Ndef tag.")
                 } finally {
                     ndef.close()
                 }
@@ -32,10 +34,12 @@ object NdefWriter {
             formatable.connect()
             try {
                 formatable.format(message)
+                NfcLog.i("Successfully formatted and wrote NDEF message to tag.")
             } finally {
                 formatable.close()
             }
         }.recoverCatching { throwable ->
+            NfcLog.e("NdefWriter error: ${throwable.message}", throwable)
             when (throwable) {
                 is FormatException -> throw IllegalStateException("The tag rejected the NDEF message format.", throwable)
                 else -> throw throwable
