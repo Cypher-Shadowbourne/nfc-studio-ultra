@@ -940,7 +940,7 @@ enum class StatusTone {
 }
 
 data class NfcStudioUiState(
-    val mode: NfcMode = NfcMode.IDLE,
+    val mode: NfcMode = NfcMode.READ,
     val writeData: NdefWriteData = NdefWriteData(),
     val multiWriteList: List<NdefWriteData> = emptyList(),
     val cloneMessage: android.nfc.NdefMessage? = null,
@@ -954,10 +954,10 @@ data class NfcStudioUiState(
     val logs: List<String> = emptyList(),
     val showTemplateSaveDialog: Boolean = false,
     val pendingAction: PendingAction? = null,
-    val status: String = "NFC is stopped.",
+    val status: String = "Read is ready. Tap a tag now.",
     val statusTone: StatusTone = StatusTone.INFO,
-    val lastActionMessage: String = "Ready",
-    val armedMessage: String = "Pick Read, Write, or Erase.",
+    val lastActionMessage: String = "Read mode selected",
+    val armedMessage: String = "Tap the tag on the back of your phone.",
     val feedbackEventId: Long = 0L,
     val feedbackType: UiFeedbackType = UiFeedbackType.NONE,
     val expertMode: Boolean = false
